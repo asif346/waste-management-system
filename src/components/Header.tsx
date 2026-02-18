@@ -12,34 +12,8 @@ import {
   DropdownMenuTrigger 
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
-import { Web3Auth } from "@web3auth/modal"
-import { CHAIN_NAMESPACES, IProvider, WEB3AUTH_NETWORK } from "@web3auth/base"
-import { EthereumPrivateKeyProvider } from "@web3auth/ethereum-provider"
 import { useMediaQuery } from "@/hooks/useMediaQuery"
 import { createUser, getUnreadNotifications, markNotificationAsRead, getUserByEmail, getUserBalance } from "@/utils/db/actions"
-
-const clientId = "BJKdDFkNtkWX87XqkuWrDu4rbkSvWyQZ5lswS0ucINxxcN0inRVW8zzKAywPPzgiOHP7_3PcfFwfpvcQvSdaLRs";
-
-const chainConfig = {
-  chainNamespace: CHAIN_NAMESPACES.EIP155,
-  chainId: "0xaa36a7",
-  rpcTarget: "https://rpc.ankr.com/eth_sepolia",
-  displayName: "Ethereum Sepolia Testnet",
-  blockExplorerUrl: "https://sepolia.etherscan.io",
-  ticker: "ETH",
-  tickerName: "Ethereum",
-  logo: "https://cryptologos.cc/logos/ethereum-eth-logo.png",
-};
-
-const privateKeyProvider = new EthereumPrivateKeyProvider({
-  config: { chainConfig },
-});
-
-const web3auth = new Web3Auth({
-  clientId,
-  web3AuthNetwork: WEB3AUTH_NETWORK.TESTNET, // Changed from SAPPHIRE_MAINNET to TESTNET
-  privateKeyProvider,
-});
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -47,7 +21,6 @@ interface HeaderProps {
 }
 
 export default function Header({ onMenuClick, totalEarnings }: HeaderProps) {
-  const [provider, setProvider] = useState<IProvider | null>(null);
   const [loggedIn, setLoggedIn] = useState(false);
   const [loading, setLoading] = useState(true);
   const [userInfo, setUserInfo] = useState<any>(null);
@@ -61,25 +34,20 @@ export default function Header({ onMenuClick, totalEarnings }: HeaderProps) {
   useEffect(() => {
     const init = async () => {
       try {
-        await web3auth.initModal();
-        setProvider(web3auth.provider);
-
-        if (web3auth.connected) {
+        const storedEmail = typeof window !== "undefined" ? localStorage.getItem('userEmail') : null;
+        if (storedEmail) {
           setLoggedIn(true);
-          const user = await web3auth.getUserInfo();
+          const user = { email: storedEmail, name: 'Anonymous User' };
           setUserInfo(user);
-          if (user.email) {
-            localStorage.setItem('userEmail', user.email);
-            try {
-              await createUser(user.email, user.name || 'Anonymous User');
-            } catch (error) {
-              console.error("Error creating user:", error);
-              // Handle the error appropriately, maybe show a message to the user
-            }
+          try {
+            await createUser(user.email, user.name || 'Anonymous User');
+          } catch (error) {
+            console.error("Error creating user:", error);
+            // Handle the error appropriately, maybe show a message to the user
           }
         }
       } catch (error) {
-        console.error("Error initializing Web3Auth:", error);
+        console.error("Error initializing user session:", error);
       } finally {
         setLoading(false);
       }
@@ -133,59 +101,32 @@ export default function Header({ onMenuClick, totalEarnings }: HeaderProps) {
   }, [userInfo]);
 
   const login = async () => {
-    if (!web3auth) {
-      console.log("web3auth not initialized yet");
-      return;
-    }
     try {
-      const web3authProvider = await web3auth.connect();
-      setProvider(web3authProvider);
-      setLoggedIn(true);
-      const user = await web3auth.getUserInfo();
-      setUserInfo(user);
-      if (user.email) {
-        localStorage.setItem('userEmail', user.email);
-        try {
-          await createUser(user.email, user.name || 'Anonymous User');
-        } catch (error) {
-          console.error("Error creating user:", error);
-          // Handle the error appropriately, maybe show a message to the user
-        }
+      const email = typeof window !== "undefined" ? window.prompt("Enter your email to login") : null;
+      if (!email) return;
+
+      const user = { email, name: 'Anonymous User' };
+      localStorage.setItem('userEmail', email);
+      try {
+        await createUser(user.email, user.name || 'Anonymous User');
+      } catch (error) {
+        console.error("Error creating user:", error);
       }
+
+      setUserInfo(user);
+      setLoggedIn(true);
     } catch (error) {
       console.error("Error during login:", error);
     }
   };
 
   const logout = async () => {
-    if (!web3auth) {
-      console.log("web3auth not initialized yet");
-      return;
-    }
     try {
-      await web3auth.logout();
-      setProvider(null);
       setLoggedIn(false);
       setUserInfo(null);
       localStorage.removeItem('userEmail');
     } catch (error) {
       console.error("Error during logout:", error);
-    }
-  };
-
-  const getUserInfo = async () => {
-    if (web3auth.connected) {
-      const user = await web3auth.getUserInfo();
-      setUserInfo(user);
-      if (user.email) {
-        localStorage.setItem('userEmail', user.email);
-        try {
-          await createUser(user.email, user.name || 'Anonymous User');
-        } catch (error) {
-          console.error("Error creating user:", error);
-          // Handle the error appropriately, maybe show a message to the user
-        }
-      }
     }
   };
 
@@ -197,7 +138,7 @@ export default function Header({ onMenuClick, totalEarnings }: HeaderProps) {
   };
 
   if (loading) {
-    return <div>Loading Web3Auth...</div>;
+    return <div>Loading...</div>;
   }
 
   return (
@@ -282,8 +223,8 @@ export default function Header({ onMenuClick, totalEarnings }: HeaderProps) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={getUserInfo}>
-                  {userInfo ? userInfo.name : "Fetch User Info"}
+                <DropdownMenuItem>
+                  {userInfo ? (userInfo.name || userInfo.email) : "Anonymous User"}
                 </DropdownMenuItem>
                 <DropdownMenuItem>
                   <Link href="/settings">Profile</Link>

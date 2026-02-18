@@ -1,6 +1,5 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { GoogleGenerativeAI } from '@google/generative-ai'
 import { Send, Loader2 } from 'lucide-react'
 
 type Message = {
@@ -15,9 +14,11 @@ export default function MessagesPage() {
   const [error, setError] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
+  const openRouterApiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY
+  const openRouterModel = process.env.NEXT_PUBLIC_OPENROUTER_MODEL || 'openai/gpt-4o-mini'
+
   useEffect(() => {
-    const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_AI_API_KEY
-    console.log('API Key:', API_KEY ? 'Present' : 'Missing')
+    console.log('API Key:', openRouterApiKey ? 'Present' : 'Missing')
   }, [])
 
   useEffect(() => {
@@ -36,15 +37,38 @@ export default function MessagesPage() {
     setInput('')
 
     try {
-      const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_AI_API_KEY
-      if (!API_KEY) throw new Error('API key is missing')
-
-      const genAI = new GoogleGenerativeAI(API_KEY)
-      const model = genAI.getGenerativeModel({ model: "gemini-pro" })
+      if (!openRouterApiKey) throw new Error('OpenRouter API key is missing')
 
       console.log('Sending message:', newMessage.content)
-      const result = await model.generateContent(newMessage.content)
-      const responseText = result.response.text()
+      
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openRouterApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: openRouterModel,
+          messages: [
+            ...messages.map(msg => ({
+              role: msg.role === 'user' ? 'user' : 'assistant',
+              content: msg.content
+            })),
+            {
+              role: 'user',
+              content: newMessage.content
+            }
+          ]
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || `API request failed: ${response.statusText}`);
+      }
+
+      const data = await response.json()
+      const responseText = data.choices[0]?.message?.content || ''
       console.log('Received response:', responseText)
 
       const assistantMessage: Message = { role: 'assistant', content: responseText }

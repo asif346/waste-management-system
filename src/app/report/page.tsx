@@ -2,17 +2,33 @@
 import { useState, useCallback, useEffect } from 'react'
 import {  MapPin, Upload, CheckCircle, Loader } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { StandaloneSearchBox,  useJsApiLoader } from '@react-google-maps/api'
 import { Libraries } from '@react-google-maps/api';
 import { createUser, getUserByEmail, createReport, getRecentReports } from '@/utils/db/actions';
 import { useRouter } from 'next/navigation';
 import { toast } from 'react-hot-toast'
 
-const geminiApiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+const openRouterApiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY;
+const openRouterModel = process.env.NEXT_PUBLIC_OPENROUTER_MODEL || 'openai/gpt-4o-mini';
 const googleMapsApiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 const libraries: Libraries = ['places'];
+
+function extractFirstJsonObject(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  // Handle ```json ... ``` or ``` ... ``` blocks
+  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const candidate = fenceMatch ? fenceMatch[1].trim() : trimmed;
+
+  if (candidate.startsWith('{') && candidate.endsWith('}')) return candidate;
+
+  const first = candidate.indexOf('{');
+  const last = candidate.lastIndexOf('}');
+  if (first === -1 || last === -1 || last <= first) return null;
+  return candidate.slice(first, last + 1);
+}
 
 export default function ReportPage() {
   const [user, setUser] = useState<{ id: number; email: string; name: string } | null>(null);
@@ -99,19 +115,12 @@ export default function ReportPage() {
     setVerificationStatus('verifying')
     
     try {
-      const genAI = new GoogleGenerativeAI(geminiApiKey!);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      if (!openRouterApiKey) {
+        throw new Error('OpenRouter API key is missing');
+      }
 
       const base64Data = await readFileAsBase64(file);
-
-      const imageParts = [
-        {
-          inlineData: {
-            data: base64Data.split(',')[1],
-            mimeType: file.type,
-          },
-        },
-      ];
+      const base64Image = base64Data.split(',')[1];
 
       const prompt = `You are an expert in waste management and recycling. Analyze this image and provide:
         1. The type of waste (e.g., plastic, paper, glass, metal, organic)
@@ -125,12 +134,58 @@ export default function ReportPage() {
           "confidence": confidence level as a number between 0 and 1
         }`;
 
-      const result = await model.generateContent([prompt, ...imageParts]);
-      const response = await result.response;
-      const text = response.text();
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${openRouterApiKey}`,
+        'Content-Type': 'application/json',
+        'X-Title': 'Waste Management System',
+      };
+      if (typeof window !== 'undefined') {
+        headers['HTTP-Referer'] = window.location.origin;
+      }
+
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: openRouterModel,
+          temperature: 0,
+          response_format: { type: 'json_object' },
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are a vision-capable assistant. Return ONLY a valid JSON object (no markdown, no extra text) with keys: wasteType (string), quantity (string), confidence (number 0..1).',
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: prompt
+                },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: `data:${file.type};base64,${base64Image}`
+                  }
+                }
+              ]
+            }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || `API request failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const text = data.choices[0]?.message?.content || '';
       
       try {
-        const parsedResult = JSON.parse(text);
+        const jsonText = extractFirstJsonObject(text) ?? text;
+        const parsedResult = JSON.parse(jsonText);
         if (parsedResult.wasteType && parsedResult.quantity && parsedResult.confidence) {
           setVerificationResult(parsedResult);
           setVerificationStatus('success');
@@ -145,10 +200,12 @@ export default function ReportPage() {
         }
       } catch (error) {
         console.error('Failed to parse JSON response:', text);
+        toast.error('Verification failed: model returned invalid JSON.');
         setVerificationStatus('failure');
       }
     } catch (error) {
       console.error('Error verifying waste:', error);
+      toast.error(error instanceof Error ? error.message : 'Error verifying waste.');
       setVerificationStatus('failure');
     }
   }
